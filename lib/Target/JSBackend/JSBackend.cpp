@@ -1744,12 +1744,53 @@ void JSWriter::generateExpression(const User *I, raw_string_ostream& Code) {
     break;
   }
   case Instruction::Ret: {
-    const ReturnInst* ret =  cast<ReturnInst>(I);
+    const ReturnInst* ret = cast<ReturnInst>(I);
     const Value *RV = ret->getReturnValue();
+
+    // TODO: The following is an adapted version of getPrecedingMustTailCall in
+    // lib/Transforms/Utils/InlineFunction.cpp. In LLVM > 3.5.1 we shall use
+    // getTerminatingMustTailCall of BasicBlock.
+    const CallInst *CI = nullptr;
+    if (ret->getParent()->size() > 1) { // getPrevNode segfaults on first node
+      auto *Prev = ret->getPrevNode();
+      CI = dyn_cast_or_null<CallInst>(Prev);
+      if (RV && RV != Prev) {
+        CI = nullptr;
+      } else {
+        if (auto *BI = dyn_cast_or_null<BitCastInst>(Prev)) {
+          auto *V = BI->getOperand(0);
+          Prev = BI->getPrevNode();
+          if (!Prev || V != Prev) {
+            CI = nullptr;
+          } else {
+            CI = dyn_cast<CallInst>(Prev);
+          }
+        }
+        if (CI && !CI->isMustTailCall()) {
+          CI = nullptr;
+        }
+      }
+    }
+
+    // XXX Asm.js does not support all musttail calls. If the bitcast is to
+    // void or between integer and floating point types, we'll get a validation
+    // error later. TODO: Report it already here.
     Code << "STACKTOP = sp;";
+    if (CI && RV) {
+      auto *RT = RV->getType();
+      Code << "if (0) {return ";
+      Code << getParenCast(getConstant(UndefValue::get(RT)), RT, ASM_NONSPECIFIC);
+      Code << ";}";
+    }
     Code << "return";
     if (RV != NULL) {
-      Code << " " << getValueAsCastParenStr(RV, ASM_NONSPECIFIC | ASM_MUST_CAST);
+      if (CI) {
+        std::string Call = handleCall(CI);
+        if (Call.empty()) return;
+        Code << " " << Call;
+      } else {
+        Code << " " << getValueAsCastParenStr(RV, ASM_NONSPECIFIC | ASM_MUST_CAST);
+      }
     }
     break;
   }
@@ -2099,6 +2140,10 @@ void JSWriter::generateExpression(const User *I, raw_string_ostream& Code) {
   }
   case Instruction::Call: {
     const CallInst *CI = cast<CallInst>(I);
+    if (CI->isMustTailCall()) {
+      Code << "/* tail call */";
+      break;
+    }
     std::string Call = handleCall(CI);
     if (Call.empty()) return;
     Code << Call;

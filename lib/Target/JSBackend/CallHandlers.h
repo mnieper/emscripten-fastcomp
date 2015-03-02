@@ -127,10 +127,11 @@ DEF_CALL_HANDLER(__default__, {
     // does not return a value
     getAssignIfNeeded(CI); // ensure the variable is defined, but do not emit it here
                            // it should have 0 uses, but just to be safe
-  } else if (!ActualRT->isVoidTy()) {
+  } else if (!ActualRT->isVoidTy() && !cast<CallInst>(CI)->isMustTailCall()) {
     unsigned FFI_IN = FFI ? ASM_FFI_IN : 0;
     text = getAssignIfNeeded(CI) + "(" + getCast(text, ActualRT, ASM_NONSPECIFIC | FFI_IN) + ")";
   }
+  // TODO: Report an error if tail calling a foreign function.
   return text;
 })
 
